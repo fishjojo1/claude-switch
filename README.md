@@ -5,7 +5,7 @@ Switch between Claude Code accounts. Save, restore, and manage multiple credenti
 ## Install
 
 ```bash
-npm install -g claude-switch
+npm install -g claude-code-switch
 ```
 
 ## Usage
