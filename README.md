@@ -46,4 +46,4 @@ Claude Code stores credentials in `~/.claude/.credentials.json`. This tool copie
 
 ## License
 
-MIT
+Written by claude code, 0 work on my end. Do whatever you want with it.
