@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CLAUDE_DIR="$HOME/.claude"
+CREDS_FILE="$CLAUDE_DIR/.credentials.json"
+STATE_FILE="$HOME/.claude.json"
+PROFILES_DIR="$CLAUDE_DIR/profiles"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+mkdir -p "$PROFILES_DIR"
+
+usage() {
+    cat <<EOF
+${BOLD}claude-switch${NC} — switch between Claude Code accounts
+
+${BOLD}USAGE${NC}
+    claude-switch save <name>       Save current credentials as a named profile
+    claude-switch use <name>        Switch to a saved profile
+    claude-switch list              List all saved profiles
+    claude-switch show              Show the currently active profile
+    claude-switch delete <name>     Delete a saved profile
+    claude-switch rename <old> <new> Rename a profile
+
+${BOLD}EXAMPLES${NC}
+    claude-switch save work         # save current account as "work"
+    claude-switch save personal     # log in to another account, then save it
+    claude-switch use work          # switch back to work account
+    claude-switch list              # see all profiles
+EOF
+}
+
+get_account_info() {
+    local creds_file="$1"
+    if [ ! -f "$creds_file" ]; then
+        echo "no credentials"
+        return
+    fi
+
+    local sub_type token
+    sub_type=$(jq -r '.claudeAiOauth.subscriptionType // "unknown"' "$creds_file" 2>/dev/null)
+    token=$(jq -r '.claudeAiOauth.accessToken // ""' "$creds_file" 2>/dev/null)
+
+    if [ -z "$token" ]; then
+        echo "no oauth token"
+        return
+    fi
+
+    # Extract a short identifier from the token (last 8 chars)
+    local token_hint="${token: -8}"
+    local rate_tier
+    rate_tier=$(jq -r '.claudeAiOauth.rateLimitTier // "unknown"' "$creds_file" 2>/dev/null)
+
+    # Try to get email from companion state file
+    local state_file="${creds_file%.json}.state.json"
+    local email=""
+    if [ -f "$state_file" ]; then
+        email=$(jq -r '.oauthAccount.emailAddress // ""' "$state_file" 2>/dev/null)
+    fi
+
+    if [ -n "$email" ]; then
+        echo "${email} — ${sub_type} (${rate_tier})"
+    else
+        echo "${sub_type} (${rate_tier}) ...${token_hint}"
+    fi
+}
+
+get_active_profile() {
+    if [ ! -f "$CREDS_FILE" ]; then
+        echo ""
+        return
+    fi
+
+    local current_hash
+    current_hash=$(md5sum "$CREDS_FILE" 2>/dev/null | awk '{print $1}')
+
+    for profile_file in "$PROFILES_DIR"/*.json; do
+        [ -f "$profile_file" ] || continue
+        # Skip state and backup files
+        local bname
+        bname=$(basename "$profile_file")
+        [[ "$bname" == *.state.json ]] && continue
+        [[ "$bname" == _backup_* ]] && continue
+        local profile_hash
+        profile_hash=$(md5sum "$profile_file" 2>/dev/null | awk '{print $1}')
+        if [ "$current_hash" = "$profile_hash" ]; then
+            basename "$profile_file" .json
+            return
+        fi
+    done
+    echo ""
+}
+
+cmd_save() {
+    local name="${1:-}"
+    if [ -z "$name" ]; then
+        echo -e "${RED}Error:${NC} profile name required"
+        echo "Usage: claude-switch save <name>"
+        exit 1
+    fi
+
+    if [ ! -f "$CREDS_FILE" ]; then
+        echo -e "${RED}Error:${NC} no credentials found at $CREDS_FILE"
+        echo "Log in to Claude Code first, then save."
+        exit 1
+    fi
+
+    local dest="$PROFILES_DIR/${name}.json"
+    if [ -f "$dest" ]; then
+        echo -e "${YELLOW}Profile '${name}' already exists.${NC}"
+        read -rp "Overwrite? [y/N] " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            exit 0
+        fi
+    fi
+
+    cp "$CREDS_FILE" "$dest"
+    chmod 600 "$dest"
+
+    # Save oauthAccount from state file alongside credentials
+    local state_dest="$PROFILES_DIR/${name}.state.json"
+    if [ -f "$STATE_FILE" ]; then
+        jq '{oauthAccount, hasAvailableSubscription}' "$STATE_FILE" > "$state_dest" 2>/dev/null || true
+        chmod 600 "$state_dest"
+    fi
+
+    local info
+    info=$(get_account_info "$dest")
+    echo -e "${GREEN}Saved${NC} profile ${BOLD}${name}${NC} — ${DIM}${info}${NC}"
+}
+
+cmd_use() {
+    local name="${1:-}"
+    if [ -z "$name" ]; then
+        echo -e "${RED}Error:${NC} profile name required"
+        echo "Usage: claude-switch use <name>"
+        exit 1
+    fi
+
+    local src="$PROFILES_DIR/${name}.json"
+    if [ ! -f "$src" ]; then
+        echo -e "${RED}Error:${NC} profile '${name}' not found"
+        echo "Available profiles:"
+        cmd_list
+        exit 1
+    fi
+
+    # Check if already active
+    local active
+    active=$(get_active_profile)
+    if [ "$active" = "$name" ]; then
+        echo -e "${CYAN}Already using profile '${name}'${NC}"
+        exit 0
+    fi
+
+    # Back up current credentials if they don't match any profile
+    if [ -f "$CREDS_FILE" ] && [ -z "$active" ]; then
+        local backup="$PROFILES_DIR/_backup_$(date +%s).json"
+        cp "$CREDS_FILE" "$backup"
+        chmod 600 "$backup"
+        echo -e "${DIM}Backed up unsaved credentials to ${backup}${NC}"
+    fi
+
+    cp "$src" "$CREDS_FILE"
+    chmod 600 "$CREDS_FILE"
+
+    # Restore oauthAccount into state file
+    local state_src="$PROFILES_DIR/${name}.state.json"
+    if [ -f "$state_src" ] && [ -f "$STATE_FILE" ]; then
+        local tmp
+        tmp=$(mktemp)
+        jq --slurpfile profile "$state_src" \
+            '.oauthAccount = $profile[0].oauthAccount | .hasAvailableSubscription = $profile[0].hasAvailableSubscription' \
+            "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+        chmod 600 "$STATE_FILE"
+    fi
+
+    local info
+    info=$(get_account_info "$CREDS_FILE")
+    echo -e "${GREEN}Switched${NC} to ${BOLD}${name}${NC} — ${DIM}${info}${NC}"
+    echo -e "${YELLOW}Note:${NC} restart any running Claude Code sessions for the switch to take effect."
+}
+
+cmd_list() {
+    local active
+    active=$(get_active_profile)
+    local found=0
+
+    for profile_file in "$PROFILES_DIR"/*.json; do
+        [ -f "$profile_file" ] || continue
+        local name
+        name=$(basename "$profile_file" .json)
+        # Skip state and backup files
+        [[ "$name" == *.state ]] && continue
+        [[ "$name" == _backup_* ]] && continue
+
+        found=1
+        local info
+        info=$(get_account_info "$profile_file")
+
+        if [ "$name" = "$active" ]; then
+            echo -e "  ${GREEN}*${NC} ${BOLD}${name}${NC}  ${DIM}${info}${NC}  ${GREEN}(active)${NC}"
+        else
+            echo -e "    ${name}  ${DIM}${info}${NC}"
+        fi
+    done
+
+    if [ "$found" -eq 0 ]; then
+        echo -e "${DIM}  No profiles saved yet. Use 'claude-switch save <name>' to save one.${NC}"
+    fi
+}
+
+cmd_show() {
+    local active
+    active=$(get_active_profile)
+    if [ -n "$active" ]; then
+        local info
+        info=$(get_account_info "$CREDS_FILE")
+        echo -e "Active profile: ${BOLD}${active}${NC} — ${DIM}${info}${NC}"
+    else
+        if [ -f "$CREDS_FILE" ]; then
+            local info
+            info=$(get_account_info "$CREDS_FILE")
+            echo -e "Active credentials: ${DIM}${info}${NC}"
+            echo -e "${YELLOW}These credentials are not saved to any profile.${NC}"
+        else
+            echo -e "${DIM}No active credentials.${NC}"
+        fi
+    fi
+}
+
+cmd_delete() {
+    local name="${1:-}"
+    if [ -z "$name" ]; then
+        echo -e "${RED}Error:${NC} profile name required"
+        echo "Usage: claude-switch delete <name>"
+        exit 1
+    fi
+
+    local target="$PROFILES_DIR/${name}.json"
+    if [ ! -f "$target" ]; then
+        echo -e "${RED}Error:${NC} profile '${name}' not found"
+        exit 1
+    fi
+
+    read -rp "Delete profile '${name}'? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    rm "$target"
+    rm -f "$PROFILES_DIR/${name}.state.json"
+    echo -e "${GREEN}Deleted${NC} profile ${BOLD}${name}${NC}"
+}
+
+cmd_rename() {
+    local old="${1:-}"
+    local new="${2:-}"
+    if [ -z "$old" ] || [ -z "$new" ]; then
+        echo -e "${RED}Error:${NC} both old and new names required"
+        echo "Usage: claude-switch rename <old> <new>"
+        exit 1
+    fi
+
+    local src="$PROFILES_DIR/${old}.json"
+    local dest="$PROFILES_DIR/${new}.json"
+
+    if [ ! -f "$src" ]; then
+        echo -e "${RED}Error:${NC} profile '${old}' not found"
+        exit 1
+    fi
+    if [ -f "$dest" ]; then
+        echo -e "${RED}Error:${NC} profile '${new}' already exists"
+        exit 1
+    fi
+
+    mv "$src" "$dest"
+    # Also rename state file if it exists
+    local state_src="$PROFILES_DIR/${old}.state.json"
+    local state_dest="$PROFILES_DIR/${new}.state.json"
+    [ -f "$state_src" ] && mv "$state_src" "$state_dest"
+    echo -e "${GREEN}Renamed${NC} ${BOLD}${old}${NC} → ${BOLD}${new}${NC}"
+}
+
+# Main dispatch
+case "${1:-}" in
+    save)   cmd_save "${2:-}" ;;
+    use)    cmd_use "${2:-}" ;;
+    list|ls) cmd_list ;;
+    show)   cmd_show ;;
+    delete|rm) cmd_delete "${2:-}" ;;
+    rename|mv) cmd_rename "${2:-}" "${3:-}" ;;
+    help|--help|-h) usage ;;
+    "")     usage ;;
+    *)
+        echo -e "${RED}Unknown command:${NC} $1"
+        usage
+        exit 1
+        ;;
+esac

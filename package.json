@@ -1,0 +1,32 @@
+{
+  "name": "claude-switch",
+  "version": "1.0.0",
+  "description": "Switch between Claude Code accounts — save, restore, and manage multiple credential profiles",
+  "bin": {
+    "claude-switch": "./claude-switch"
+  },
+  "files": [
+    "claude-switch"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "account-switcher",
+    "credentials",
+    "profile-manager",
+    "cli"
+  ],
+  "author": "kek",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fishjojo1/claude-switch.git"
+  },
+  "homepage": "https://github.com/fishjojo1/claude-switch#readme",
+  "bugs": {
+    "url": "https://github.com/fishjojo1/claude-switch/issues"
+  },
+  "engines": {
+    "node": ">=14"
+  }
+}
