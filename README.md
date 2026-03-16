@@ -34,7 +34,9 @@ claude-switch delete old-profile
 
 ## How it works
 
-Claude Code stores credentials in `~/.claude/.credentials.json`. This tool copies that file into named profiles under `~/.claude/profiles/` and swaps them back when you switch.
+Claude Code stores credentials in `~/.claude/.credentials.json`, but it also caches account state (email, subscription status) in `~/.claude.json`. Simply swapping the credentials file isn't enough — if `~/.claude.json` still references the old account, Claude Code will behave as if you never switched.
+
+`claude-switch` handles both files. When you save a profile, it captures the relevant account state alongside the credentials. When you switch, it restores both, so Claude Code picks up the correct account immediately.
 
 - Credentials are stored with `600` permissions (owner-only read/write)
 - Unsaved credentials are automatically backed up before switching
