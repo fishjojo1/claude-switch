@@ -1,9 +1,9 @@
 {
-  "name": "claude-code-switch",
-  "version": "1.0.0",
+  "name": "cc-acc-switch",
+  "version": "1.0.1",
   "description": "Switch between Claude Code accounts — save, restore, and manage multiple credential profiles",
   "bin": {
-    "claude-switch": "./bin/claude-switch.js"
+    "claude-switch": "bin/claude-switch.js"
   },
   "files": [
     "bin/claude-switch.js",
