@@ -18,8 +18,7 @@ NC='\033[0m'
 mkdir -p "$PROFILES_DIR"
 
 usage() {
-    cat <<EOF
-${BOLD}claude-switch${NC} — switch between Claude Code accounts
+    echo -e "${BOLD}claude-switch${NC} — switch between Claude Code accounts
 
 ${BOLD}USAGE${NC}
     claude-switch save <name>       Save current credentials as a named profile
@@ -30,11 +29,10 @@ ${BOLD}USAGE${NC}
     claude-switch rename <old> <new> Rename a profile
 
 ${BOLD}EXAMPLES${NC}
-    claude-switch save work         # save current account as "work"
+    claude-switch save work         # save current account as \"work\"
     claude-switch save personal     # log in to another account, then save it
     claude-switch use work          # switch back to work account
-    claude-switch list              # see all profiles
-EOF
+    claude-switch list              # see all profiles"
 }
 
 get_account_info() {
